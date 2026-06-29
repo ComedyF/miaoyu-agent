@@ -6,20 +6,19 @@ import {
   ChevronDown,
   Clipboard,
   ClipboardCheck,
-  Clock3,
   Heart,
+  ImageUp,
   Loader2,
-  Mic2,
   Plus,
-  SendHorizontal,
-  Settings2,
   ShieldCheck,
   Sparkles,
   Star,
+  Trash2,
   Wand2,
   Zap,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import type { CSSProperties, ChangeEvent } from "react";
 
 type Analysis = {
   scene?: string;
@@ -47,6 +46,23 @@ type Preset = {
   name: string;
   styles: string[];
   goal: string;
+};
+
+type ScreenshotResult = {
+  replyContext: string;
+  ocrSummary?: string;
+  analysis?: Analysis;
+  suggestedGoal?: string;
+  confidence?: string;
+};
+
+type ReplyRequest = {
+  message: string;
+  relationship: string;
+  goal: string;
+  intensity: number;
+  styles: string[];
+  count: number;
 };
 
 const relationships = [
@@ -101,59 +117,39 @@ const initialReplies: Reply[] = [
   {
     id: "sample-1",
     style: "温柔",
-    tags: ["安慰鼓励", "提供支持"],
-    text: "辛苦你了，看到你这么拼我很心疼。记得照顾好自己，劳逸结合才能走得更远呀。如果需要帮忙，随时告诉我！",
+    tags: ["安慰", "支持"],
+    text: "辛苦你了，看到你这么忙我也挺心疼的。先照顾好自己，能休息的时候就别硬撑，需要我帮忙的地方随时说。",
     suitableFor: "适合关系友好、想表达关心时直接发送。",
     rationale: "先承接情绪，再给出支持，不急着讲道理。",
-    wordCount: 46,
+    wordCount: 50,
     favorite: false,
   },
   {
     id: "sample-2",
-    style: "坚定",
-    tags: ["鼓励支持", "积极正向"],
-    text: "你已经做得很好了，忙是暂时的，成长是长期的。稳住节奏，一步一步来，难关都会过去的。",
-    suitableFor: "适合对方需要被肯定，也需要一点力量感。",
-    rationale: "表达相信和肯定，避免空泛安慰。",
-    wordCount: 40,
+    style: "职场",
+    tags: ["专业", "协作"],
+    text: "理解你最近压力比较大。如果方便的话，我们可以一起把优先级梳理一下，先处理最关键的部分，其他事情再分步推进。",
+    suitableFor: "适合同事、合作伙伴或上下级沟通。",
+    rationale: "既表达理解，也给出可执行支持。",
+    wordCount: 53,
     favorite: false,
   },
   {
     id: "sample-3",
     style: "幽默",
-    tags: ["轻松化解", "缓解压力"],
-    text: "救火队员也需要充电呀。记得给自己放个小假，不然系统会提示“电量不足”啦。要不要今晚一起去吃顿好的？",
+    tags: ["缓和", "轻松"],
+    text: "救火队员也得充电呀。今晚先给自己留点休息时间，不然系统真的要弹出“电量不足”的提醒了。",
     suitableFor: "适合熟人之间，需要把气氛放松一点。",
-    rationale: "用轻松比喻降低压力，再给出具体陪伴。",
-    wordCount: 50,
-    favorite: false,
-  },
-  {
-    id: "sample-4",
-    style: "高情商",
-    tags: ["共情理解", "积极建议"],
-    text: "能感受到你的压力，这段时间确实不容易。辛苦之余也别忘了给自己一些喘息的空间，我相信你一定能顺利度过这段时期。",
-    suitableFor: "适合不确定亲疏时，既体面又真诚。",
-    rationale: "避免评判，只做理解、提醒和支持。",
-    wordCount: 55,
-    favorite: false,
-  },
-  {
-    id: "sample-5",
-    style: "职场",
-    tags: ["专业沟通", "务实建议"],
-    text: "理解你目前的工作节奏，建议可以先梳理优先级，聚焦关键任务，适当授权和协作，能有效减轻负担。需要的话我也可以配合。",
-    suitableFor: "适合同事、合作伙伴或上下级沟通。",
-    rationale: "专业但不冷淡，补充可执行支持。",
-    wordCount: 66,
+    rationale: "用轻松比喻降低压力，再自然表达关心。",
+    wordCount: 43,
     favorite: false,
   },
 ];
 
 const defaultPresets: Preset[] = [
   { id: "preset-1", name: "安慰鼓励（温柔 + 幽默）", styles: ["温柔", "幽默"], goal: "安慰鼓励 + 提供支持" },
-  { id: "preset-2", name: "职场沟通（职场 + 高情商）", styles: ["职场", "高情商"], goal: "安慰鼓励 + 提供支持" },
-  { id: "preset-3", name: "直接回应（坚定 + 简洁）", styles: ["坚定"], goal: "表达边界" },
+  { id: "preset-2", name: "职场沟通（职场 + 高情商）", styles: ["职场", "高情商"], goal: "确认信息" },
+  { id: "preset-3", name: "清晰边界（坚定 + 高情商）", styles: ["坚定", "高情商"], goal: "表达边界" },
 ];
 
 function wordCount(text: string) {
@@ -172,13 +168,49 @@ async function postJson<T>(url: string, payload: unknown): Promise<T> {
   });
   const data = await response.json();
   if (!response.ok) {
-    throw new Error(data?.error || "请求失败");
+    throw new Error(data?.hint ? `${data.error || "请求失败"} ${data.hint}` : data?.error || "请求失败");
   }
   return data as T;
 }
 
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("图片读取失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImage(src: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("图片加载失败"));
+    image.src = src;
+  });
+}
+
+async function compressImageForUpload(file: File) {
+  const dataUrl = await readFileAsDataUrl(file);
+  const image = await loadImage(dataUrl);
+  const maxSide = 1800;
+  const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+  const width = Math.max(1, Math.round(image.width * scale));
+  const height = Math.max(1, Math.round(image.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("图片处理失败");
+  }
+  context.drawImage(image, 0, 0, width, height);
+  return canvas.toDataURL("image/jpeg", 0.88);
+}
+
 function App() {
-  const [message, setMessage] = useState("最近工作好忙，感觉每天都在救火，\n都没时间好好休息，真的有点累了。");
+  const [message, setMessage] = useState("最近工作好忙，感觉每天都在救火，都没时间好好休息，真的有点累了。");
   const [relationship, setRelationship] = useState(relationships[0]);
   const [goal, setGoal] = useState(goals[0]);
   const [intensity, setIntensity] = useState(38);
@@ -195,6 +227,9 @@ function App() {
   });
   const [sortMode, setSortMode] = useState("推荐优先");
   const [loading, setLoading] = useState(false);
+  const [imageLoading, setImageLoading] = useState(false);
+  const [imageSummary, setImageSummary] = useState("");
+  const [imagePreview, setImagePreview] = useState("");
   const [refiningId, setRefiningId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -214,25 +249,23 @@ function App() {
     return copy;
   }, [replies, sortMode]);
 
-  const generatedCount = sortedReplies.length || selectedStyles.length;
-
   const timeline = useMemo(
     () => [
       {
         title: "场景识别",
-        status: loading ? "分析中" : "完成",
+        status: loading || imageLoading ? "分析中" : "完成",
         icon: Brain,
-        detail: [analysis.scene || "等待识别输入消息的场景", `关键词：${message.slice(0, 22).replace(/\s/g, "、") || "暂无"}`],
+        detail: [analysis.scene || "等待识别输入内容", `当前文本：${message.slice(0, 24).replace(/\s/g, "、") || "暂无"}`],
       },
       {
         title: "意图分析",
-        status: loading ? "分析中" : "完成",
+        status: loading || imageLoading ? "分析中" : "完成",
         icon: Zap,
-        detail: [analysis.intent || "等待判断用户真正想达成的回复目标", `当前目标：${goal}`],
+        detail: [analysis.intent || "等待判断回复目标", `回复目标：${goal}`],
       },
       {
         title: "风险检查",
-        status: loading ? "检查中" : "完成",
+        status: loading || imageLoading ? "检查中" : "完成",
         icon: ShieldCheck,
         detail: [
           `情绪风险：${analysis.risk?.emotionRisk || "低"}`,
@@ -247,14 +280,8 @@ function App() {
         detail: selectedStyles,
         chips: true,
       },
-      {
-        title: "结果排序",
-        status: loading ? "待处理" : "完成",
-        icon: Star,
-        detail: [`当前排序：${sortMode}`],
-      },
     ],
-    [analysis, goal, loading, message, selectedStyles, sortMode],
+    [analysis, goal, imageLoading, loading, message, selectedStyles],
   );
 
   function toggleStyle(style: string) {
@@ -266,22 +293,76 @@ function App() {
     });
   }
 
-  async function generateReplies() {
+  async function handleImageUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    setError("");
+    setImageSummary("");
+    setImageLoading(true);
+    try {
+      const imageDataUrl = await compressImageForUpload(file);
+      setImagePreview(imageDataUrl);
+      const data = await postJson<ScreenshotResult>("/api/extract-chat-context", {
+        imageDataUrl,
+        relationship,
+        goal,
+      });
+      const nextMessage = data.replyContext.trim();
+      const nextGoal = data.suggestedGoal && goals.includes(data.suggestedGoal) ? data.suggestedGoal : goal;
+
+      if (!nextMessage) {
+        throw new Error("截图已读取，但没有提取到可用于回复的聊天上下文。");
+      }
+
+      setMessage(nextMessage);
+      if (nextGoal !== goal) {
+        setGoal(nextGoal);
+      }
+      if (data.replyContext) {
+        setImageSummary(data.ocrSummary ? `${data.ocrSummary} 正在生成回复。` : "已从截图中提取聊天上下文，正在生成回复。");
+      }
+      if (data.analysis) {
+        setAnalysis(data.analysis);
+      }
+      await generateReplies({
+        message: nextMessage,
+        goal: nextGoal,
+      });
+      setImageSummary(data.ocrSummary || "已从截图中提取聊天上下文并生成回复。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "截图识别失败");
+    } finally {
+      setImageLoading(false);
+    }
+  }
+
+  async function generateReplies(overrides: Partial<ReplyRequest> = {}) {
+    const payload: ReplyRequest = {
+      message: overrides.message ?? message,
+      relationship: overrides.relationship ?? relationship,
+      goal: overrides.goal ?? goal,
+      intensity: overrides.intensity ?? intensity,
+      styles: overrides.styles ?? selectedStyles,
+      count: overrides.count ?? 10,
+    };
+
+    if (!payload.message.trim()) {
+      return false;
+    }
+
     setError("");
     setLoading(true);
     try {
-      const data = await postJson<{ replies: Reply[]; analysis: Analysis }>("/api/generate-replies", {
-        message,
-        relationship,
-        goal,
-        intensity,
-        styles: selectedStyles,
-        count: 10,
-      });
+      const data = await postJson<{ replies: Reply[]; analysis: Analysis }>("/api/generate-replies", payload);
       setReplies(data.replies);
       setAnalysis(data.analysis || {});
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "生成失败");
+      return false;
     } finally {
       setLoading(false);
     }
@@ -362,46 +443,37 @@ function App() {
           </div>
           <div>
             <h1>妙语Agent</h1>
-            <p>让每一次回复，都更得体</p>
+            <p>输入文字或聊天截图，生成得体回复</p>
           </div>
-        </div>
-
-        <nav className="nav-tabs" aria-label="主导航">
-          <button className="active">对话回复</button>
-          <button>润色改写</button>
-          <button>总结提炼</button>
-          <button>智能问答</button>
-        </nav>
-
-        <div className="top-actions">
-          <button>
-            <Clock3 size={18} />
-            历史记录
-          </button>
-          <button>
-            <Bookmark size={18} />
-            收藏夹
-          </button>
-          <button className="avatar">Y</button>
-          <ChevronDown size={16} />
         </div>
       </header>
 
       <main className="workspace">
         <aside className="control-panel" aria-label="回复配置">
-          <StepTitle number={1} title="输入对方的消息" count={`${wordCount(message)}/500`} color="coral" />
+          <StepTitle number={1} title="输入消息 / 上传截图" count={`${wordCount(message)}/800`} color="coral" />
+          <label className={classNames("upload-box", imageLoading && "loading")}>
+            <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" onChange={handleImageUpload} disabled={imageLoading} />
+            {imageLoading ? <Loader2 size={20} className="spin" /> : <ImageUp size={20} />}
+            <span>{imageLoading ? "正在解读聊天截图" : "上传聊天记录截图"}</span>
+          </label>
+          {imagePreview && (
+            <div className="image-context">
+              <img src={imagePreview} alt="聊天截图预览" />
+              <p>{imageSummary || "截图已上传，等待解读。"}</p>
+            </div>
+          )}
           <div className="textarea-wrap">
             <textarea
               value={message}
-              maxLength={500}
+              maxLength={800}
               onChange={(event) => setMessage(event.target.value)}
-              placeholder="把对方发来的话贴在这里..."
+              placeholder="把对方发来的话粘贴在这里，或上传聊天截图自动填充上下文。"
             />
             <div className="textarea-tools">
               <button type="button" onClick={() => setMessage("")}>
+                <Trash2 size={15} />
                 清空
               </button>
-              <Mic2 size={17} />
             </div>
           </div>
 
@@ -434,21 +506,12 @@ function App() {
                 {style}
               </button>
             ))}
-            <button className="style-chip ghost" type="button">
-              <Plus size={14} />
-              自定义
-            </button>
           </div>
 
-          <div className="generate-row">
-            <button className="generate-button" type="button" onClick={generateReplies} disabled={loading || !message.trim()}>
-              {loading ? <Loader2 size={20} className="spin" /> : <Sparkles size={20} />}
-              {loading ? "生成中" : "生成回复"}
-            </button>
-            <button className="icon-button" type="button" aria-label="高级设置">
-              <Settings2 size={21} />
-            </button>
-          </div>
+          <button className="generate-button" type="button" onClick={() => void generateReplies()} disabled={loading || imageLoading || !message.trim()}>
+            {loading ? <Loader2 size={20} className="spin" /> : <Sparkles size={20} />}
+            {loading ? "生成中" : "生成回复"}
+          </button>
           {error && <p className="error-message">{error}</p>}
         </aside>
 
@@ -456,7 +519,7 @@ function App() {
           <div className="result-header">
             <div className="title-line">
               <Sparkles size={20} />
-              <h2>为你生成 {generatedCount} 条回复</h2>
+              <h2>为你生成 {sortedReplies.length} 条回复</h2>
             </div>
             <label className="sort-select">
               排序：
@@ -495,8 +558,8 @@ function App() {
               const Icon = item.icon;
               return (
                 <div className="timeline-item" key={item.title}>
-                  <div className={classNames("timeline-dot", loading && index > 2 && "pending")}>
-                    {loading && index === 3 ? <Loader2 size={15} className="spin" /> : index < 4 || !loading ? <Check size={15} /> : <span>{index + 1}</span>}
+                  <div className={classNames("timeline-dot", (loading || imageLoading) && index > 2 && "pending")}>
+                    {(loading || imageLoading) && index === 3 ? <Loader2 size={15} className="spin" /> : <Check size={15} />}
                   </div>
                   <div className="timeline-content">
                     <div className="timeline-head">
@@ -524,7 +587,6 @@ function App() {
           <div className="preset-panel">
             <div className="preset-header">
               <strong>我的预设</strong>
-              <button type="button">管理</button>
             </div>
             <div className="preset-list">
               {presets.map((preset) => (
@@ -584,12 +646,9 @@ function ReplyCard({
   onFavorite: () => void;
   onRefine: () => void;
 }) {
-  const tone = styleTone[reply.style] || styleTone["高情商"];
+  const tone = styleTone[reply.style] || styleTone.高情商;
   return (
-    <article className="reply-card" style={{ "--accent": tone.accent } as React.CSSProperties}>
-      <button className={classNames("favorite-star", reply.favorite && "active")} type="button" onClick={onFavorite} aria-label="收藏">
-        <Star size={21} />
-      </button>
+    <article className="reply-card" style={{ "--accent": tone.accent } as CSSProperties}>
       <div className="tag-row">
         <span className="primary-tag" style={{ background: tone.bg, color: tone.text }}>
           {reply.style}
@@ -612,12 +671,8 @@ function ReplyCard({
             润色
           </button>
           <button type="button" onClick={onFavorite}>
-            <Heart size={17} fill={reply.favorite ? "currentColor" : "none"} />
-            收藏
-          </button>
-          <button type="button">
-            <SendHorizontal size={17} />
-            发送感
+            {reply.favorite ? <Star size={17} fill="currentColor" /> : <Heart size={17} />}
+            {reply.favorite ? "已收藏" : "收藏"}
           </button>
         </div>
       </div>
